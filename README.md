@@ -15,17 +15,18 @@ For existing FlareSolverr users, the compatible `/v1` endpoint works with Prowla
 
 ## Features
 
+- **Isolated browser sessions** - preserve login cookies and localStorage across native API, MCP and FlareSolverr requests, with capacity limits and automatic idle expiry. [Session API](https://docs.trawl.germondai.com/api-reference/browser-sessions).
 - **MCP tools for AI agents** - read pages as Markdown or text, scrape HTML, extract JSON records, capture screenshots, and inspect browser diagnostics from known public URLs
 - **4-tier execution** - plain HTTP fetch → cached browser session → fresh challenge solve → optional residential proxy
 - **Structured extraction and screenshots** - select fields from repeated elements, render JavaScript pages, and capture a viewport, full page, or specific element
 - **Challenge-aware HTTP/HTTPS proxy** - direct forwarding for normal traffic, automatic tier escalation for detected walls, plus WebSockets, binary bodies, and Range/206 support
 - **Local metrics dashboard** - persistent request history, tier outcomes, failure causes, and live updates
 - **Multi-WAF handling** - dedicated Cloudflare, Akamai Bot Manager, and Imperva/Incapsula detection and browser flows
-- **Native captcha solving** - CF Turnstile/Interstitial, reCAPTCHA v2 (free STT), hCaptcha, GeeTest v4 Slide, ALTCHA, and Friendly Captcha v1/v2
+- **Native captcha solving** - CF Turnstile/Interstitial, reCAPTCHA v2 (free STT), hCaptcha checkbox/audio where available, GeeTest Slide, ALTCHA, Friendly Captcha v1/v2, and CAP proof-of-work
 - **Camoufox Firefox** - fingerprint-patched at the C++/Juggler level to reduce automation signals
 - **Session cache** - solved cookies and browser identity stored in Redis; accepted sessions can avoid a fresh solve
 - **FlareSolverr compatible** - works with Prowlarr, Jackett, Sonarr, and the full \*arr ecosystem out of the box
-- **No paid solver API required** - reCAPTCHA audio can use Google's free STT endpoint or an optional local Whisper service
+- **Local solving by default** - no paid solver API required; optional [2Captcha fallback](./apps/docs/getting-started/configuration.md#optional-external-captcha-solver) for reCAPTCHA v2/Enterprise and standalone Turnstile, with site-specific profiles for other documented task types
 
 ## Sponsors
 
@@ -374,7 +375,7 @@ image: ghcr.io/germondai/trawl:latest
 image: ghcr.io/germondai/trawl:baseline
 ```
 
-Synology note: many Synology NAS units (DSM 7.x on J4125 / older hardware) ship kernel 4.4.x, which Bun's modern runtime can't fully handle. Standard Bun requires kernel 5.1+ (5.6+ recommended); the baseline build degrades gracefully down to kernel 3.10. The `:baseline` tag is published for that case — **confirmed working** on a Synology DS920+ (Celeron J4125, DSM 7.3.2, kernel 4.4.302): the container starts cleanly, `/health` reports healthy, and it solves live Cloudflare challenges via `/v1` (see [#1](https://github.com/germondai/trawl/issues/1)). Published by independent GitHub Actions workflows: pushing a release tag such as `v1.7.0` creates `:1.7.0`, `:latest`, `:1.7.0-baseline`, and `:baseline`; the daily 02:00 UTC nightly build creates `:nightly` and `:nightly-<dev-sha>` from the latest `dev` commit.
+Synology note: many Synology NAS units (DSM 7.x on J4125 / older hardware) ship kernel 4.4.x, which Bun's modern runtime can't fully handle. Standard Bun requires kernel 5.1+ (5.6+ recommended); the baseline build degrades gracefully down to kernel 3.10. The `:baseline` tag is published for that case — **confirmed working** on a Synology DS920+ (Celeron J4125, DSM 7.3.2, kernel 4.4.302): the container starts cleanly, `/health` reports healthy, and it solves live Cloudflare challenges via `/v1` (see [#1](https://github.com/germondai/trawl/issues/1)). Published by independent GitHub Actions workflows: pushing a release tag such as `v1.8.0` creates `:1.8.0`, `:latest`, `:1.8.0-baseline`, and `:baseline`; the daily 02:00 UTC nightly build creates `:nightly` and `:nightly-<dev-sha>` from the latest `dev` commit.
 
 ## Releases & versioning
 
@@ -429,6 +430,8 @@ for pool and mounted-file examples.
 | `BROWSER_MAX_CONTENT_PROCESSES`    | `2`                          | Cap Firefox content processes per browser (`dom.ipc.processCount`); lowers RAM/CPU      |
 | `SCRAPE_MIN_TIER`                  | `1`                          | Lowest tier allowed globally (`1` HTTP, `2` cached browser, `3` fresh, `4` residential) |
 | `SESSION_CACHE_DRIVER`             | `redis`                      | Session cache backend: `redis` or single-process `memory`                               |
+| `BROWSER_SESSION_MAX_ENTRIES` | `4` | Maximum named browser contexts per instance; start with `1` for small containers |
+| `BROWSER_SESSION_TTL_SECONDS` | `3600` | Named session idle expiry in seconds; independent of the clearance cache |
 | `REDIS_SESSION_TTL_SECONDS`        | `3600`                       | Redis or in-memory session TTL (seconds)                                                |
 | `MEMORY_SESSION_CACHE_MAX_ENTRIES` | `1000`                       | Maximum LRU-bounded entries for the memory driver                                       |
 | `REDIS_URL`                        | —                            | Redis connection string; empty or unset disables the Redis cache                        |

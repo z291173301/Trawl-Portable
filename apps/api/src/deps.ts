@@ -1,11 +1,16 @@
 import { BrowserPool, MemorySessionCache, SessionCache, type SessionCacheStore } from "@trawl/browser"
-import type { AcquireOptions, OrchestratorDeps } from "@trawl/tiers"
+import { type AcquireOptions, BrowserSessions, type OrchestratorDeps } from "@trawl/tiers"
 import type { SessionData } from "@trawl/types"
 import {
   ACQUIRE_TIMEOUT_MS,
+  BROWSER_BLOCK_ADS,
   BROWSER_HARDWARE_CONCURRENCY,
+  BROWSER_IDLE_TIMEOUT_MS,
   BROWSER_MAX_CONTENT_PROCESSES,
+  BROWSER_SESSION_MAX_ENTRIES,
+  BROWSER_SESSION_TTL_SECONDS,
   CLOSE_TIMEOUT_MS,
+  EXTERNAL_CAPTCHA,
   HEADFUL_POOL_SIZE,
   LAUNCH_TIMEOUT_MS,
   MEMORY_SESSION_CACHE_MAX_ENTRIES,
@@ -24,10 +29,12 @@ import {
   USER_PREFS,
 } from "./config"
 import { localProxyCa } from "./proxy/localTrust"
+import { readRuntimeMemory } from "./runtimeMemory"
 
 const state: {
   pool?: BrowserPool
   headfulPool?: BrowserPool
+  sessions?: BrowserSessions
 } = {}
 
 const handleOwners = new WeakMap<object, BrowserPool>()
@@ -156,6 +163,7 @@ export const getHeadfulPool = () => state.headfulPool
 const initSessionCache = (): Promise<void> => sessionCacheRecovery?.start() ?? Promise.resolve()
 
 export const shutdownPools = async (): Promise<void> => {
+  await state.sessions?.shutdown()
   await Promise.all([sessionCacheRecovery?.stop(), state.pool?.shutdown(), state.headfulPool?.shutdown()])
 }
 
@@ -170,11 +178,14 @@ export const initPool = async ({
     acquireTimeoutMs: ACQUIRE_TIMEOUT_MS,
     recycleAfterTemporaryContexts: RECYCLE_AFTER_TEMPORARY_CONTEXTS,
     contentProcesses: BROWSER_MAX_CONTENT_PROCESSES,
+    idleTimeoutMs: BROWSER_IDLE_TIMEOUT_MS,
+    blockAds: BROWSER_BLOCK_ADS,
     hardwareConcurrency: BROWSER_HARDWARE_CONCURRENCY,
     stallAfterMs: STALL_TIMEOUT_MS,
     closeTimeoutMs: CLOSE_TIMEOUT_MS,
     launchTimeoutMs: LAUNCH_TIMEOUT_MS,
     userPrefs: USER_PREFS,
+    memoryUsage: () => readRuntimeMemory(poolSize, headfulPoolSize),
   })
 
   state.headfulPool = undefined
@@ -184,6 +195,8 @@ export const initPool = async ({
       acquireTimeoutMs: ACQUIRE_TIMEOUT_MS,
       recycleAfterTemporaryContexts: RECYCLE_AFTER_TEMPORARY_CONTEXTS,
       contentProcesses: BROWSER_MAX_CONTENT_PROCESSES,
+      idleTimeoutMs: BROWSER_IDLE_TIMEOUT_MS,
+      blockAds: BROWSER_BLOCK_ADS,
       hardwareConcurrency: BROWSER_HARDWARE_CONCURRENCY,
       virtualDisplay: true,
       label: "pool:headful",
@@ -191,11 +204,21 @@ export const initPool = async ({
       closeTimeoutMs: CLOSE_TIMEOUT_MS,
       launchTimeoutMs: LAUNCH_TIMEOUT_MS,
       userPrefs: USER_PREFS,
+      memoryUsage: () => readRuntimeMemory(poolSize, headfulPoolSize),
     })
   }
   // Publish the pool before its first await. Tier 1 can serve immediately and
   // browser-backed requests can wait in acquire() while capacity warms.
   state.pool = pool
+  state.sessions = new BrowserSessions({
+    acquireBrowser: (domain, budgetMs, options) => getDeps().acquireBrowser(domain, budgetMs, options),
+    releaseBrowser: (handle) => getDeps().releaseBrowser(handle),
+    maxSessions: BROWSER_SESSION_MAX_ENTRIES,
+    defaultProxy: () => (SCRAPE_MIN_TIER === 4 ? residentialProxyPool : proxyPool)?.next(),
+    requireProxy: SCRAPE_MIN_TIER === 4,
+    trustedProxyCa: localProxyCa,
+    ttlMs: BROWSER_SESSION_TTL_SECONDS * 1_000,
+  })
 
   try {
     await Promise.all([initCache(), pool.init()])
@@ -206,6 +229,7 @@ export const initPool = async ({
       console.log(`[api] headful pool warm (${headfulPoolSize} browser${headfulPoolSize === 1 ? "" : "s"})`)
     }
   } catch (error) {
+    await state.sessions?.shutdown()
     await Promise.all([pool.shutdown(), state.headfulPool?.shutdown()])
     throw error
   }
@@ -217,15 +241,16 @@ export const getDeps = (): OrchestratorDeps => {
   if (!state.pool) throw new Error("pool not ready")
   const p = state.pool
   return {
+    sessions: state.sessions,
     acquireBrowser: async (d: string, budgetMs?: number, options?: AcquireOptions) => {
       if (options?.headful) {
         const headful = state.headfulPool
         if (!headful) throw new Error("DataDome requires BROWSER_HEADFUL_POOL_SIZE greater than 0")
-        const handle = await headful.acquire(d, budgetMs)
+        const handle = await headful.acquire(d, budgetMs, options?.signal, options?.browserId)
         handleOwners.set(handle, headful)
         return handle
       }
-      const handle = await p.acquire(d, budgetMs)
+      const handle = await p.acquire(d, budgetMs, options?.signal, options?.browserId)
       handleOwners.set(handle, p)
       return handle
     },
@@ -252,5 +277,6 @@ export const getDeps = (): OrchestratorDeps => {
     residentialProxyPool,
     trustedProxyCa: localProxyCa,
     minTier: SCRAPE_MIN_TIER,
+    externalCaptcha: EXTERNAL_CAPTCHA,
   }
 }
